@@ -1,0 +1,20 @@
+[
+  {
+    "id": "evt-web-06930f61",
+    "timestamp": "2026-10-09T10:51:41.850577+00:00",
+    "hour": 10,
+    "user": "alice",
+    "source_ip": "127.0.0.1",
+    "event_type": "sensitive_resource_access",
+    "resource": "/vault/customer_ssn_database",
+    "details": "User 'alice' accessed restricted sensitive database: /vault/customer_ssn_database",
+    "_trust_level": "STANDARD",
+    "_telemetry_classification": "NORMAL",
+    "_ingest_method": "api",
+    "_hmac_verified": true,
+    "_source_known": false,
+    "_ingest_ts": "2026-10-09T10:51:41.852223+00:00",
+    "_validation_warnings": [],
+    "sequence": 46
+  }
+]

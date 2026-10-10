@@ -1,0 +1,479 @@
+import os
+import json
+import hmac
+import hashlib
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+from fastapi import FastAPI, File, UploadFile, HTTPException, Body, Request, Header
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, JSONResponse
+
+from backend.parser import parse_json_logs, parse_csv_logs, parse_logs, normalize_log_event, parse_timestamp
+from backend.detector import RuleEngine, AIDetector
+from backend.baseline import EntityBaselineTracker
+from backend.risk_engine import RiskEngine, SourceHealthTracker
+
+from fastapi.middleware.cors import CORSMiddleware
+
+# Setup paths
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data"
+LOGS_FILE = DATA_DIR / "logs.json"
+FRONTEND_DIR = BASE_DIR / "frontend"
+
+# Environmental security configuration
+LOGSHIELD_INGEST_TOKEN = os.getenv("LOGSHIELD_INGEST_TOKEN", "logshield-secret-token")
+LOGSHIELD_HMAC_SECRET = os.getenv("LOGSHIELD_HMAC_SECRET", "logshield-hmac-secret-key")
+LOGSHIELD_REQUIRE_HMAC = os.getenv("LOGSHIELD_REQUIRE_HMAC", "false").lower() == "true"
+
+# Ensure data directory exists
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+if not LOGS_FILE.exists():
+    with open(LOGS_FILE, "w", encoding="utf-8") as f:
+        json.dump([], f)
+
+app = FastAPI(
+    title="LOGSHIELD API",
+    description="AI-Assisted Log-Based Intrusion Detection System (V0.5)",
+    version="0.5"
+)
+
+# Enable CORS for cross-origin login website and separate frontend integration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Instantiate engines and trackers
+rule_engine = RuleEngine()
+ai_detector = AIDetector()
+risk_engine = RiskEngine()
+source_health_tracker = SourceHealthTracker(silence_threshold_seconds=30)
+
+# Deduplication and sequence tracking state
+seen_event_ids: set[str] = set()
+seen_sequences: dict[str, int] = {}  # source_ip -> highest sequence number
+
+
+def sync_source_health_from_events(events: List[Dict[str, Any]]):
+    """Sync source activity timestamps and sequence tracking from log events."""
+    for evt in events:
+        src = evt.get("source_ip", "127.0.0.1")
+        ts = evt.get("timestamp")
+        source_health_tracker.update_source(src, ts)
+        if evt.get("id"):
+            seen_event_ids.add(str(evt["id"]))
+        if evt.get("sequence") is not None:
+            try:
+                seq_val = int(evt["sequence"])
+                seen_sequences[src] = max(seen_sequences.get(src, -1), seq_val)
+            except (ValueError, TypeError):
+                pass
+
+
+def read_logs_file() -> List[Dict[str, Any]]:
+    """Helper to read and parse logs from logs.json."""
+    if not LOGS_FILE.exists():
+        return []
+    try:
+        with open(LOGS_FILE, "r", encoding="utf-8") as f:
+            content = f.read()
+            events = parse_logs(content, filename="logs.json")
+            sync_source_health_from_events(events)
+            return events
+    except Exception:
+        return []
+
+
+def write_logs_file(events: List[Dict[str, Any]]):
+    """Helper to write events to logs.json."""
+    with open(LOGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(events, f, indent=2)
+
+
+@app.get("/api/health")
+def get_health():
+    """Health check endpoint with system telemetry status."""
+    sources = source_health_tracker.get_source_health()
+    active_gaps = [s for s in sources if s.get("is_evidence_gap")]
+    return {
+        "status": "ok",
+        "app": "LOGSHIELD",
+        "version": "0.5",
+        "logs_path": str(LOGS_FILE),
+        "ingest_endpoint": "/api/ingest",
+        "tracked_sources_count": len(sources),
+        "evidence_gaps_count": len(active_gaps),
+        "ingest_security": {
+            "token_required": True,
+            "hmac_supported": True,
+            "hmac_required": LOGSHIELD_REQUIRE_HMAC
+        }
+    }
+
+
+@app.get("/api/logs")
+def get_logs():
+    """Returns the current raw log events."""
+    events = read_logs_file()
+    return {
+        "count": len(events),
+        "logs": events
+    }
+
+
+@app.get("/api/analyze")
+def analyze_logs():
+    """Analyzes logs via Parser, Rules, IsolationForest AI, Correlation, and Risk Engine."""
+    events = read_logs_file()
+    source_health_list = source_health_tracker.get_source_health()
+    active_gaps = [s for s in source_health_list if s.get("is_evidence_gap")]
+
+    if not events:
+        risk_summary = risk_engine.evaluate_overall_risk(
+            [], [], {"ai_anomaly_score": 0, "anomalous_count": 0}, [], [], source_health_list
+        )
+        return {
+            "total_events": 0,
+            "critical_alerts": 0,
+            "high_risk_events": 0,
+            "average_risk": 0,
+            "anomalous_events_count": 0,
+            "risk_summary": risk_summary,
+            "matched_rules": [],
+            "baseline_anomalies": [],
+            "ai_analysis": {
+                "ai_anomaly_score": 0,
+                "anomalous_count": 0,
+                "anomalous_events": []
+            },
+            "incidents": [],
+            "events": [],
+            "sources_health": source_health_list,
+            "evidence_gaps": active_gaps,
+            "detection_breakdown": {
+                "rule_score": 0,
+                "ai_score": 0,
+                "baseline_score": 0,
+                "correlation_bonus": 0
+            }
+        }
+
+    # 1. Rule Engine Evaluation
+    rules = rule_engine.evaluate_rules(events)
+
+    # 2. AI Anomaly Detection
+    ai_res = ai_detector.detect_anomalies(events)
+
+    # 3. Entity Baseline Evaluation
+    baseline_tracker = EntityBaselineTracker()
+    baseline_anomalies = baseline_tracker.evaluate_baselines(events)
+
+    # 4. Event Correlation into Incidents & Case Files
+    incidents = risk_engine.correlate_incidents(events, rules, baseline_anomalies, source_health_list)
+
+    # 5. Overall Risk & Separate Evidence Confidence Assessment
+    risk_summary = risk_engine.evaluate_overall_risk(events, rules, ai_res, baseline_anomalies, incidents, source_health_list)
+
+    # Stats calculations
+    critical_alerts = sum(1 for inc in incidents if inc.get("severity") == "CRITICAL") + \
+                      sum(1 for r in rules if r.get("score_contribution", 0) >= 30)
+    
+    high_risk_events = sum(1 for e in ai_res.get("anomalous_events", []) if e.get("anomaly_score", 0) >= 60)
+
+    return {
+        "total_events": len(events),
+        "critical_alerts": critical_alerts,
+        "high_risk_events": high_risk_events,
+        "average_risk": risk_summary["risk_score"],
+        "anomalous_events_count": ai_res.get("anomalous_count", 0),
+        "risk_summary": risk_summary,
+        "matched_rules": rules,
+        "baseline_anomalies": baseline_anomalies,
+        "ai_analysis": ai_res,
+        "incidents": incidents,
+        "events": events,
+        "sources_health": source_health_list,
+        "evidence_gaps": active_gaps,
+        "detection_breakdown": risk_summary["breakdown"]
+    }
+
+
+@app.post("/api/ingest")
+async def ingest_event(
+    request: Request,
+    x_logshield_token: Optional[str] = Header(None, alias="X-LogShield-Token"),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    x_logshield_signature: Optional[str] = Header(None, alias="X-LogShield-Signature"),
+    x_signature_256: Optional[str] = Header(None, alias="X-Signature-256")
+):
+    """
+    Real-time secure event ingestion API endpoint for external web applications.
+    Validates token, HMAC signature, timestamp drift, and duplicate/replayed event sequences.
+    """
+    # 1. Integration Token Validation
+    token = x_logshield_token
+    if not token and authorization:
+        if authorization.lower().startswith("bearer "):
+            token = authorization[7:].strip()
+        else:
+            token = authorization.strip()
+            
+    if not token:
+        token = request.query_params.get("token")
+
+    if not token or token != LOGSHIELD_INGEST_TOKEN:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": "Unauthorized",
+                "detail": "Invalid or missing integration token",
+                "code": "INVALID_TOKEN"
+            }
+        )
+
+    # 2. HMAC-SHA256 Signature Verification
+    body_bytes = await request.body()
+    sig_header = x_logshield_signature or x_signature_256
+
+    if LOGSHIELD_REQUIRE_HMAC and not sig_header:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": "Unauthorized",
+                "detail": "HMAC signature header (X-LogShield-Signature) required but missing",
+                "code": "MISSING_SIGNATURE"
+            }
+        )
+
+    if sig_header and LOGSHIELD_HMAC_SECRET:
+        clean_sig = sig_header.replace("sha256=", "").strip()
+        expected_sig = hmac.new(
+            LOGSHIELD_HMAC_SECRET.encode("utf-8"),
+            body_bytes,
+            hashlib.sha256
+        ).hexdigest()
+
+        if not hmac.compare_digest(clean_sig.lower(), expected_sig.lower()):
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": "Unauthorized",
+                    "detail": "Invalid HMAC signature verification",
+                    "code": "INVALID_SIGNATURE"
+                }
+            )
+
+    # 3. Payload Parsing & Malformed Event Validation
+    if not body_bytes or not body_bytes.strip():
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Bad Request",
+                "detail": "Empty or missing event payload",
+                "code": "MALFORMED_EVENT"
+            }
+        )
+
+    try:
+        raw_payload = json.loads(body_bytes.decode("utf-8"))
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Bad Request",
+                "detail": "Malformed JSON event payload",
+                "code": "MALFORMED_EVENT"
+            }
+        )
+
+    if isinstance(raw_payload, dict):
+        raw_events = [raw_payload]
+    elif isinstance(raw_payload, list):
+        raw_events = raw_payload
+    else:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Bad Request",
+                "detail": "JSON payload must be an event object or list of event objects",
+                "code": "MALFORMED_EVENT"
+            }
+        )
+
+    if not raw_events:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Bad Request",
+                "detail": "No event objects found in payload",
+                "code": "MALFORMED_EVENT"
+            }
+        )
+
+    # 4. Event Validation: Timestamps, Sequence & Replay Prevention
+    now_utc = datetime.now(timezone.utc)
+    accepted_events = []
+
+    for idx, raw_evt in enumerate(raw_events):
+        if not isinstance(raw_evt, dict):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Bad Request",
+                    "detail": f"Event at index {idx} is not a valid JSON object",
+                    "code": "MALFORMED_EVENT"
+                }
+            )
+
+        # Timestamp validation & drift check
+        ts_val = raw_evt.get("timestamp") or raw_evt.get("time")
+        if ts_val:
+            try:
+                dt_str, _ = parse_timestamp(ts_val)
+                dt_obj = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                drift_seconds = (dt_obj - now_utc).total_seconds()
+
+                if drift_seconds > 300 or drift_seconds < -86400:
+                    return JSONResponse(
+                        status_code=422,
+                        content={
+                            "error": "Unprocessable Entity",
+                            "detail": f"Event timestamp drift detected ({ts_val}). Timestamp outside acceptable 24h window.",
+                            "code": "TIMESTAMP_DRIFT"
+                        }
+                    )
+            except Exception:
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "error": "Unprocessable Entity",
+                        "detail": f"Unparseable timestamp format in event: {ts_val}",
+                        "code": "INVALID_TIMESTAMP"
+                    }
+                )
+
+        # Duplicate / Replay Check
+        evt_id = raw_evt.get("id") or raw_evt.get("event_id")
+        src_ip = raw_evt.get("source_ip") or raw_evt.get("ip") or "127.0.0.1"
+        seq_num = raw_evt.get("sequence")
+
+        if evt_id and str(evt_id) in seen_event_ids:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "Conflict",
+                    "detail": f"Duplicate event ID detected: '{evt_id}'. Replay rejected.",
+                    "code": "DUPLICATE_EVENT",
+                    "event_id": str(evt_id)
+                }
+            )
+
+        if seq_num is not None:
+            try:
+                seq_int = int(seq_num)
+                last_seq = seen_sequences.get(src_ip)
+                if last_seq is not None and seq_int <= last_seq:
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            "error": "Conflict",
+                            "detail": f"Replayed or out-of-order sequence number {seq_int} for source '{src_ip}' (last seen sequence: {last_seq}).",
+                            "code": "DUPLICATE_SEQUENCE",
+                            "sequence": seq_int
+                        }
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        normalized = normalize_log_event(raw_evt, idx)
+        if seq_num is not None:
+            normalized["sequence"] = seq_num
+
+        accepted_events.append(normalized)
+
+    # 5. Ingestion & Storage Update
+    existing = read_logs_file()
+    updated_logs = existing + accepted_events
+    write_logs_file(updated_logs)
+
+    sync_source_health_from_events(accepted_events)
+
+    # Run instant analysis
+    analysis_result = analyze_logs()
+
+    return {
+        "status": "success",
+        "message": f"Successfully ingested {len(accepted_events)} live security event(s).",
+        "ingested_count": len(accepted_events),
+        "analysis": analysis_result
+    }
+
+
+@app.post("/api/upload")
+async def upload_logs(
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+    mode: Optional[str] = "overwrite"
+):
+    """Upload and ingest log files (JSON, CSV, Syslog/TXT) or direct JSON payload."""
+    parsed_events = []
+    filename = ""
+
+    if file and file.filename:
+        filename = file.filename
+        content = await file.read()
+        parsed_events = parse_logs(content, filename=filename)
+    else:
+        try:
+            body_bytes = await request.body()
+            if body_bytes:
+                content_str = body_bytes.decode("utf-8", errors="ignore")
+                parsed_events = parse_logs(content_str, filename="payload.json")
+        except Exception:
+            pass
+
+    if not parsed_events:
+        raise HTTPException(status_code=400, detail="Could not parse any valid log events.")
+
+    if mode == "append":
+        existing = read_logs_file()
+        parsed_events = existing + parsed_events
+
+    write_logs_file(parsed_events)
+    sync_source_health_from_events(parsed_events)
+
+    return analyze_logs()
+
+
+@app.post("/api/reset")
+def reset_logs():
+    """Clears all logs and tracking state in data/logs.json."""
+    seen_event_ids.clear()
+    seen_sequences.clear()
+    source_health_tracker.sources.clear()
+    write_logs_file([])
+    return {
+        "status": "success",
+        "message": "Logs reset successfully.",
+        "analysis": analyze_logs()
+    }
+
+
+# Mount static files for dashboard frontend
+if FRONTEND_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+
+    @app.get("/", response_class=HTMLResponse)
+    def index():
+        index_path = FRONTEND_DIR / "index.html"
+        if index_path.exists():
+            with open(index_path, "r", encoding="utf-8") as f:
+                return f.read()
+        return "<h1>LOGSHIELD API Running. Frontend index.html not found.</h1>"
+

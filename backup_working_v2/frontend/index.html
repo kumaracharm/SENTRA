@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LOGSHIELD — AI Security Operations & Risk Analysis</title>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Top Navigation Header -->
+        <header class="top-bar">
+            <div class="brand">
+                <div class="shield-icon">🛡️</div>
+                <div class="brand-text">
+                    <h1>LOGSHIELD</h1>
+                    <span class="sub-brand">Enterprise AI Intrusion Detection System • v0.5</span>
+                </div>
+            </div>
+            <div class="header-controls">
+                <div class="sync-indicator">
+                    <span class="pulse-dot"></span>
+                    <span id="sync-status">LIVE MONITORING</span>
+                </div>
+                <button id="btn-refresh" class="btn btn-secondary">↻ Sync</button>
+                <button id="btn-reset-api" class="btn btn-danger">Clear Logs</button>
+            </div>
+        </header>
+
+        <!-- Main Dashboard Content -->
+        <main class="dashboard-grid">
+
+            <!-- Primary Input: Log Telemetry Ingestion Panel -->
+            <section class="panel upload-panel">
+                <div class="panel-header">
+                    <div class="title-group">
+                        <h3>📥 LOG TELEMETRY INGESTION (PRIMARY INPUT)</h3>
+                        <span class="badge badge-subtle">Supports JSON, CSV, JSONL, Syslog/TXT</span>
+                    </div>
+                    <span class="sub-text">Upload real or synthetic system log files directly into the detection pipeline</span>
+                </div>
+                <div class="upload-controls-row">
+                    <div class="file-drop-area" id="file-drop-area">
+                        <input type="file" id="log-file-input" accept=".json,.csv,.jsonl,.log,.txt" style="display: none;">
+                        <button id="btn-select-file" class="btn btn-primary">📁 Choose Log File</button>
+                        <span id="selected-file-name" class="file-name-display">No file selected</span>
+                    </div>
+                    <div class="upload-actions">
+                        <select id="upload-mode-select" class="select-filter">
+                            <option value="overwrite">Overwrite Active Logs</option>
+                            <option value="append">Append to Active Logs</option>
+                        </select>
+                        <button id="btn-upload-file" class="btn btn-success" disabled>⚡ Ingest & Analyze</button>
+                    </div>
+                </div>
+                <div id="upload-status-msg" class="upload-status"></div>
+            </section>
+
+            <!-- Top Row KPI Cards (Sections 1-5) -->
+            <section class="kpi-row">
+                <div class="kpi-card">
+                    <div class="kpi-header">TOTAL EVENTS</div>
+                    <div class="kpi-value" id="kpi-total-events">0</div>
+                    <div class="kpi-sub">Ingested log telemetry</div>
+                </div>
+
+                <div class="kpi-card">
+                    <div class="kpi-header">CRITICAL ALERTS</div>
+                    <div class="kpi-value text-critical" id="kpi-critical-alerts">0</div>
+                    <div class="kpi-sub">Rule & correlation triggers</div>
+                </div>
+
+                <div class="kpi-card">
+                    <div class="kpi-header">HIGH RISK EVENTS</div>
+                    <div class="kpi-value text-warning" id="kpi-high-risk">0</div>
+                    <div class="kpi-sub">High severity events</div>
+                </div>
+
+                <div class="kpi-card">
+                    <div class="kpi-header">ANOMALOUS EVENTS</div>
+                    <div class="kpi-value text-purple" id="kpi-anomalous">0</div>
+                    <div class="kpi-sub">IsolationForest outliers</div>
+                </div>
+
+                <div class="kpi-card">
+                    <div class="kpi-header">AVERAGE RISK</div>
+                    <div class="kpi-value" id="kpi-avg-risk">0</div>
+                    <div class="kpi-sub">Normalized system index</div>
+                </div>
+            </section>
+
+            <!-- Middle Section: Risk Score, Why Flagged, Breakdown -->
+            <div class="middle-grid">
+                <!-- Section 7: Current Risk Score -->
+                <div class="panel risk-score-panel">
+                    <div class="panel-header">
+                        <h3>OVERALL RISK SCORE</h3>
+                        <span class="badge" id="risk-severity-badge">LOW</span>
+                    </div>
+                    <div class="risk-gauge-container">
+                        <div class="risk-circle-outer">
+                            <div class="risk-circle-inner">
+                                <span class="risk-score-big" id="risk-score-value">0</span>
+                                <span class="risk-score-max">/ 100</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="confidence-box">
+                        <span class="label">Confidence Score:</span>
+                        <span class="val" id="confidence-val">100% (HIGH)</span>
+                    </div>
+                </div>
+
+                <!-- Section 8: Why This Was Flagged -->
+                <div class="panel why-flagged-panel">
+                    <div class="panel-header">
+                        <h3>WHY THIS WAS FLAGGED</h3>
+                        <span class="badge badge-subtle" id="reasons-count">0 Factors</span>
+                    </div>
+                    <div class="reasons-list" id="reasons-container">
+                        <div class="empty-state">No security threat factors detected.</div>
+                    </div>
+                </div>
+
+                <!-- Section 10: Detection Breakdown -->
+                <div class="panel breakdown-panel">
+                    <div class="panel-header">
+                        <h3>DETECTION BREAKDOWN</h3>
+                        <span class="badge badge-subtle">Engine Weights</span>
+                    </div>
+                    <div class="breakdown-metrics">
+                        <div class="breakdown-item">
+                            <div class="item-meta">
+                                <span>Rule Engine Score</span>
+                                <strong id="score-rule">0</strong>
+                            </div>
+                            <div class="progress-bar-bg">
+                                <div class="progress-bar-fill fill-rule" id="bar-rule" style="width: 0%"></div>
+                            </div>
+                        </div>
+
+                        <div class="breakdown-item">
+                            <div class="item-meta">
+                                <span>AI IsolationForest Signal</span>
+                                <strong id="score-ai">0</strong>
+                            </div>
+                            <div class="progress-bar-bg">
+                                <div class="progress-bar-fill fill-ai" id="bar-ai" style="width: 0%"></div>
+                            </div>
+                        </div>
+
+                        <div class="breakdown-item">
+                            <div class="item-meta">
+                                <span>Correlation Chain Bonus</span>
+                                <strong id="score-corr">0</strong>
+                            </div>
+                            <div class="progress-bar-bg">
+                                <div class="progress-bar-fill fill-corr" id="bar-corr" style="width: 0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Source Health & Evidence Gap Monitoring -->
+            <section class="panel source-health-panel" style="margin-bottom: 20px;">
+                <div class="panel-header">
+                    <div class="title-group">
+                        <h3>📡 SOURCE HEALTH & TELEMETRY SILENCE (EVIDENCE GAPS)</h3>
+                        <span class="badge badge-subtle" id="sources-count">0 Tracked Sources</span>
+                    </div>
+                    <span class="sub-text">Monitors real-time source ping & flags prolonged silence as SUSPECTED EVIDENCE GAP</span>
+                </div>
+                <div class="sources-grid" id="sources-container" style="display: flex; gap: 12px; flex-wrap: wrap; padding: 12px 0;">
+                    <div class="empty-state">No source telemetry active. Ingest events to monitor source health.</div>
+                </div>
+            </section>
+
+            <!-- Lower Section: Attack Timeline & Live Stream -->
+            <div class="lower-grid">
+                <!-- Section 9: Attack Timeline & Case Files -->
+                <div class="panel timeline-panel">
+                    <div class="panel-header">
+                        <h3>CORRELATED ATTACK TIMELINES & INCIDENT CASE FILES</h3>
+                        <span class="badge badge-subtle" id="incidents-count">0 Incidents</span>
+                    </div>
+                    <div class="timeline-container" id="timeline-container">
+                        <div class="empty-state">No multi-stage attack chains identified.</div>
+                    </div>
+                </div>
+
+                <!-- Section 6: Live Event Stream -->
+                <div class="panel stream-panel">
+                    <div class="panel-header">
+                        <h3>LIVE EVENT STREAM</h3>
+                        <span class="badge badge-subtle">Real-Time Ingestion</span>
+                    </div>
+                    <div class="stream-list" id="stream-container">
+                        <div class="empty-state">Awaiting log stream data...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 11: Event Table -->
+            <section class="panel table-panel">
+                <div class="panel-header table-header-flex">
+                    <div class="title-group">
+                        <h3>LOG TELEMETRY TABLE</h3>
+                        <span class="badge badge-subtle" id="table-count">0 Events</span>
+                    </div>
+                    <div class="table-actions">
+                        <input type="text" id="search-input" placeholder="Search user, IP, resource..." class="search-input">
+                        <select id="filter-type" class="select-filter">
+                            <option value="ALL">All Event Types</option>
+                            <option value="login_failed">Failed Logins</option>
+                            <option value="login_success">Successful Logins</option>
+                            <option value="privilege_change">Privilege Escalation</option>
+                            <option value="sensitive_resource_access">Sensitive Access</option>
+                            <option value="file_access">File Access</option>
+                            <option value="unusual_request">Unusual Request</option>
+                            <option value="data_transfer">Data Transfer</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="event-table">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Event Type</th>
+                                <th>User</th>
+                                <th>Source IP</th>
+                                <th>Resource / Target</th>
+                                <th>Details</th>
+                                <th>AI Anomaly</th>
+                            </tr>
+                        </thead>
+                        <tbody id="events-tbody">
+                            <tr>
+                                <td colspan="7" class="text-center">No log records ingested yet. Use simulator to trigger events.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>

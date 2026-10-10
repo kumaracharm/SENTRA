@@ -1,0 +1,385 @@
+import uuid
+import time
+from datetime import datetime, timezone
+from typing import List, Dict, Any, Optional
+
+class SourceHealthTracker:
+    """Tracks per-source activity timestamps and detects evidence gaps (prolonged telemetry silence)."""
+
+    def __init__(self, silence_threshold_seconds: int = 30):
+        self.silence_threshold_seconds = silence_threshold_seconds
+        self.sources: Dict[str, Dict[str, Any]] = {}
+
+    def update_source(self, source_ip: str, timestamp_iso: Optional[str] = None):
+        """Record activity timestamp for a source IP."""
+        if not source_ip or source_ip == "unknown":
+            source_ip = "127.0.0.1"
+
+        target_epoch = time.time()
+        iso_str = timestamp_iso or datetime.now(timezone.utc).isoformat()
+
+        if timestamp_iso:
+            try:
+                dt = datetime.fromisoformat(str(timestamp_iso).replace("Z", "+00:00"))
+                target_epoch = dt.timestamp()
+            except Exception:
+                pass
+
+        if source_ip not in self.sources:
+            self.sources[source_ip] = {
+                "source_ip": source_ip,
+                "first_seen": iso_str,
+                "last_seen_iso": iso_str,
+                "last_seen_epoch": target_epoch,
+                "event_count": 1
+            }
+        else:
+            s = self.sources[source_ip]
+            if target_epoch >= s["last_seen_epoch"]:
+                s["last_seen_iso"] = iso_str
+                s["last_seen_epoch"] = target_epoch
+            s["event_count"] += 1
+
+    def get_source_health(self, current_time_epoch: Optional[float] = None) -> List[Dict[str, Any]]:
+        """Evaluate operational health and evidence gaps across all tracked sources."""
+        now = current_time_epoch if current_time_epoch is not None else time.time()
+        health_list = []
+
+        for source_ip, data in self.sources.items():
+            last_seen_epoch = data["last_seen_epoch"]
+            silence_secs = max(0, int(now - last_seen_epoch))
+            
+            if silence_secs >= self.silence_threshold_seconds:
+                status = "SUSPECTED EVIDENCE GAP"
+                is_gap = True
+            else:
+                status = "HEALTHY"
+                is_gap = False
+
+            health_list.append({
+                "source_ip": source_ip,
+                "status": status,
+                "is_evidence_gap": is_gap,
+                "last_seen": data["last_seen_iso"],
+                "silence_seconds": silence_secs,
+                "event_count": data["event_count"]
+            })
+
+        return sorted(health_list, key=lambda x: x["silence_seconds"], reverse=True)
+
+
+class RiskEngine:
+    """Combines Rule Evidence, AI Anomaly Signals, and Correlated Events into deterministic Risk Assessments."""
+
+    def __init__(self):
+        pass
+
+    def correlate_incidents(
+        self,
+        events: List[Dict[str, Any]],
+        rules: List[Dict[str, Any]],
+        baseline_anomalies: List[Dict[str, Any]] = None,
+        source_health_list: List[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """Correlate events into attack chains grouped by user and source IP with complete Incident Case Files."""
+        if baseline_anomalies is None:
+            baseline_anomalies = []
+        if source_health_list is None:
+            source_health_list = []
+            
+        if not events:
+            return []
+
+        # Map active evidence gaps by source IP
+        gap_sources = set(s["source_ip"] for s in source_health_list if s.get("is_evidence_gap"))
+
+        # Sort events by timestamp
+        sorted_events = sorted(events, key=lambda x: str(x.get("timestamp", "")))
+
+        # Group by (user, source_ip)
+        grouped: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
+        for evt in sorted_events:
+            key = (evt.get("user", "unknown"), evt.get("source_ip", "0.0.0.0"))
+            grouped.setdefault(key, []).append(evt)
+
+        incidents = []
+        incident_idx = 1000
+
+        for (user, source_ip), chain_events in grouped.items():
+            event_types = [e.get("event_type") for e in chain_events]
+            event_ids = [e.get("id") for e in chain_events]
+            
+            # Check for attack patterns in chain
+            has_failed = "login_failed" in event_types
+            has_success = "login_success" in event_types
+            has_priv = "privilege_change" in event_types
+            has_sens = "sensitive_resource_access" in event_types
+            
+            # Check for baseline anomalies in chain
+            chain_baselines = [b for b in baseline_anomalies if b["event_id"] in event_ids]
+            has_baseline_anomaly = len(chain_baselines) > 0
+
+            # Calculate chain complexity
+            stage_count = 0
+            if has_failed: stage_count += 1
+            if has_success and has_failed: stage_count += 1
+            if has_priv: stage_count += 1
+            if has_sens: stage_count += 1
+
+            # Check if this group warrants an Incident
+            if len(chain_events) >= 2 or has_priv or has_sens or has_baseline_anomaly:
+                incident_idx += 1
+                inc_id = f"INC-{incident_idx}"
+
+                # Build attack timeline
+                timeline = []
+                for step_i, evt in enumerate(chain_events, start=1):
+                    etype = evt.get("event_type", "")
+                    ts = evt.get("timestamp", "")
+                    res = evt.get("resource", "/")
+
+                    title = {
+                        "login_failed": "Failed Authentication",
+                        "login_success": "Successful Authentication",
+                        "privilege_change": "Privilege Escalation",
+                        "sensitive_resource_access": "Sensitive Resource Access",
+                        "file_access": "File Operations",
+                        "unusual_request": "Unusual API / Request",
+                        "data_transfer": "Data Exfiltration / Transfer"
+                    }.get(etype, "System Event")
+
+                    timeline.append({
+                        "step": step_i,
+                        "timestamp": ts,
+                        "event_type": etype,
+                        "title": title,
+                        "details": f"{title} by '{user}' from {source_ip} (Resource: {res})"
+                    })
+
+                # Calculate incident specific risk score
+                inc_rule_score = 0
+                chain_rule_reasons = []
+                for r in rules:
+                    if r.get("target_user") == user or r.get("target_ip") == source_ip:
+                        inc_rule_score += r.get("score_contribution", 0)
+                        chain_rule_reasons.append(f"{r.get('rule_name')}: {r.get('description')}")
+
+                # Add baseline anomaly score contribution to incident
+                inc_baseline_score = sum(b.get("baseline_score", 0) for b in chain_baselines)
+
+                chain_bonus = stage_count * 15
+                inc_risk = min(100, inc_rule_score + inc_baseline_score + chain_bonus)
+
+                if inc_risk >= 85:
+                    inc_sev = "CRITICAL"
+                elif inc_risk >= 60:
+                    inc_sev = "HIGH"
+                elif inc_risk >= 30:
+                    inc_sev = "MEDIUM"
+                else:
+                    inc_sev = "LOW"
+
+                # Construct Verdict & Case File Details
+                if has_failed and has_success and has_priv and has_sens:
+                    verdict = "SUSPECTED ACCOUNT TAKEOVER & EXFILTRATION"
+                    explanation = f"Account Takeover & Data Access Chain: User '{user}' experienced failed logins from {source_ip}, succeeded in logging in, elevated privileges, and accessed sensitive resources."
+                    rec_action = f"Isolate source IP {source_ip}, revoke session tokens for '{user}', and enforce mandatory password reset & MFA."
+                    benign_explanations = [
+                        f"Authorized IT administrator '{user}' conducting system recovery from remote IP {source_ip}.",
+                        "Automated integration test script executing privileged administrative routine."
+                    ]
+                elif has_failed and has_success and has_priv:
+                    verdict = "PRIVILEGE ESCALATION POST-AUTHENTICATION"
+                    explanation = f"Privilege Escalation Chain: User '{user}' authenticated following failed logins and modified permission roles."
+                    rec_action = f"Temporarily suspend account '{user}' and audit recent permission changes on source IP {source_ip}."
+                    benign_explanations = [
+                        f"User '{user}' mistyped credentials before completing legitimate admin role elevation."
+                    ]
+                elif has_failed and has_success:
+                    verdict = "CREDENTIAL BRUTE FORCE SUCCESS"
+                    explanation = f"Potential Credential Brute Force: User '{user}' achieved successful login after multiple failed attempts."
+                    rec_action = f"Require immediate password change and MFA challenge for user '{user}'."
+                    benign_explanations = [
+                        f"User '{user}' forgot password and successfully remembered on subsequent attempt."
+                    ]
+                elif has_priv or has_sens:
+                    verdict = "UNAUTHORIZED SENSITIVE ACCESS"
+                    explanation = f"Elevated Access Event: Account '{user}' accessed restricted resources or changed privilege roles."
+                    rec_action = f"Review resource access logs for '{user}' and verify access authorization."
+                    benign_explanations = [
+                        f"Standard operational access to resource by authorized account '{user}'."
+                    ]
+                else:
+                    verdict = "CORRELATED SUSPICIOUS SEQUENCE"
+                    explanation = f"Correlated Activity Group: Sequential events recorded for user '{user}' from IP {source_ip}."
+                    rec_action = f"Monitor source IP {source_ip} for additional anomalous activity."
+                    benign_explanations = [
+                        "Routine user session activity grouped for security audit."
+                    ]
+
+                # Missing telemetry / evidence gaps for case file
+                missing_evidence = []
+                if source_ip in gap_sources:
+                    missing_evidence.append(f"Telemetry silence detected on source IP {source_ip} (SUSPECTED EVIDENCE GAP)")
+                missing_evidence.append(f"Endpoint process execution logs for user '{user}'")
+                missing_evidence.append(f"Network packet capture telemetry for IP {source_ip}")
+
+                # Reasons summary
+                reasons = chain_rule_reasons if chain_rule_reasons else [explanation]
+                if has_baseline_anomaly:
+                    devs = []
+                    for b in chain_baselines:
+                        devs.extend(b.get("deviations", []))
+                    if devs:
+                        reasons.append(f"Baseline Deviations: {', '.join(set(devs))}")
+
+                confidence_str = "HIGH (90%)" if len(chain_events) >= 4 and source_ip not in gap_sources else "MEDIUM (65%)" if source_ip not in gap_sources else "LOW (40% - Evidence Gap)"
+
+                incidents.append({
+                    "incident_id": inc_id,
+                    "verdict": verdict,
+                    "user": user,
+                    "source_ip": source_ip,
+                    "risk_score": inc_risk,
+                    "severity": inc_sev,
+                    "confidence": confidence_str,
+                    "event_count": len(chain_events),
+                    "reasons": reasons,
+                    "supporting_event_ids": event_ids,
+                    "correlated_events": chain_events,
+                    "attack_timeline": timeline,
+                    "explanation": explanation,
+                    "missing_evidence": missing_evidence,
+                    "plausible_benign_explanations": benign_explanations,
+                    "recommended_action": rec_action,
+                    "action_executed": False  # Recommendations MUST NOT execute automatically
+                })
+
+        return sorted(incidents, key=lambda x: x["risk_score"], reverse=True)
+
+    def evaluate_overall_risk(
+        self,
+        events: List[Dict[str, Any]],
+        rules: List[Dict[str, Any]],
+        ai_res: Dict[str, Any],
+        baseline_anomalies: List[Dict[str, Any]],
+        incidents: List[Dict[str, Any]],
+        source_health_list: List[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Calculates deterministic overall risk score, severity, confidence, and explanations."""
+        if source_health_list is None:
+            source_health_list = []
+
+        active_gaps = [s for s in source_health_list if s.get("is_evidence_gap")]
+
+        if not events:
+            conf_str = "LOW (30% — Telemetry Silence)" if active_gaps else "HIGH (100%)"
+            return {
+                "risk_score": 0,
+                "severity": "LOW",
+                "confidence": conf_str,
+                "reasons": ["No log events ingested."] + ([f"Telemetry Loss: {len(active_gaps)} source(s) experiencing SUSPECTED EVIDENCE GAP."] if active_gaps else []),
+                "breakdown": {
+                    "rule_score": 0,
+                    "ai_score": 0,
+                    "baseline_score": 0,
+                    "correlation_bonus": 0
+                },
+                "sources_health": source_health_list,
+                "evidence_gaps": active_gaps
+            }
+
+        # 1. Calculate Rule Score Base
+        rule_score_sum = sum(r.get("score_contribution", 0) for r in rules)
+        rule_score_base = min(50, rule_score_sum)
+
+        # 2. AI Anomaly Score Component
+        ai_score = ai_res.get("ai_anomaly_score", 0)
+        ai_component = (ai_score / 100.0) * 15.0  # Max 15 points from AI
+        
+        # 3. Entity Baseline Score Component
+        baseline_score_sum = sum(b.get("baseline_score", 0) for b in baseline_anomalies)
+        baseline_component = min(20.0, baseline_score_sum)
+
+        # 4. Incident Correlation Bonus
+        max_incident_risk = max((inc["risk_score"] for inc in incidents), default=0)
+        correlation_bonus = min(15.0, (max_incident_risk / 100.0) * 15.0)
+
+        # Total Raw Score - Note: Missing telemetry/evidence gaps MUST NOT increase threat risk
+        raw_risk = rule_score_base + ai_component + baseline_component + correlation_bonus
+        final_risk = int(round(min(100, max(0, raw_risk))))
+
+        # Determine Severity
+        if final_risk >= 85:
+            severity = "CRITICAL"
+        elif final_risk >= 60:
+            severity = "HIGH"
+        elif final_risk >= 30:
+            severity = "MEDIUM"
+        else:
+            severity = "LOW"
+
+        # Determine Confidence Score (based on evidence alignment and history)
+        num_rules = len(rules)
+        num_anomalies = ai_res.get("anomalous_count", 0)
+        num_baseline_anomalies = len(baseline_anomalies)
+        num_incidents = len(incidents)
+
+        confidence_val = 60  # Base confidence
+        if num_rules > 0: confidence_val += 10
+        if num_anomalies > 0: confidence_val += 5
+        if num_baseline_anomalies > 0: confidence_val += 10
+        if num_incidents > 0: confidence_val += 10
+        if len(events) >= 5: confidence_val += 5
+        
+        # Penalize confidence if baseline anomalies were flagged with LOW confidence (cold start)
+        if any(b.get("confidence") == "LOW" for b in baseline_anomalies):
+            confidence_val = min(confidence_val - 20, 50)
+            
+        # Telemetry silence / evidence gap reduces confidence (Requirement 4)
+        if active_gaps:
+            confidence_val = max(20, confidence_val - (25 * len(active_gaps)))
+
+        confidence_val = min(98, confidence_val)
+        conf_level = 'HIGH' if confidence_val >= 80 else 'MEDIUM' if confidence_val >= 50 else 'LOW'
+        gap_note = f" — Suspected Evidence Gap ({len(active_gaps)} source(s))" if active_gaps else ""
+        confidence_str = f"{confidence_val}% ({conf_level}){gap_note}"
+
+        # Construct Clear Explanations / Reasons
+        reasons = []
+        if rules:
+            rule_names = list(set(r.get("rule_name") for r in rules))
+            reasons.append(f"Triggered Security Rules: {', '.join(rule_names)}")
+
+        if num_anomalies > 0:
+            reasons.append(f"AI Anomaly Detection flagged {num_anomalies} outlier event(s) (Peak AI Score: {ai_score}/100)")
+            
+        if num_baseline_anomalies > 0:
+            reasons.append(f"Entity Baseline Engine detected {num_baseline_anomalies} deviations.")
+
+        if incidents:
+            top_inc = incidents[0]
+            reasons.append(f"Attack Chain Correlated: {top_inc['explanation']}")
+
+        if active_gaps:
+            gap_ips = [g["source_ip"] for g in active_gaps]
+            reasons.append(f"Telemetry Loss: Prolonged silence on IP(s) {', '.join(gap_ips)} (SUSPECTED EVIDENCE GAP). Confidence reduced.")
+
+        if not reasons:
+            reasons.append("Normal activity pattern detected. No security rules, AI anomalies, or baseline deviations triggered.")
+
+        return {
+            "risk_score": final_risk,
+            "severity": severity,
+            "confidence": confidence_str,
+            "reasons": reasons,
+            "breakdown": {
+                "rule_score": round(rule_score_base, 1),
+                "ai_score": round(ai_component, 1),
+                "baseline_score": round(baseline_component, 1),
+                "correlation_bonus": round(correlation_bonus, 1)
+            },
+            "sources_health": source_health_list,
+            "evidence_gaps": active_gaps
+        }
+
