@@ -11,110 +11,206 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+# Ensure logshield directory is in sys.path
 BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+WORKSPACE_ROOT = BASE_DIR.parent
+if str(WORKSPACE_ROOT) not in sys.path:
+    sys.path.insert(0, str(WORKSPACE_ROOT))
+
 DATA_DIR = BASE_DIR / "data"
 LOGS_FILE = DATA_DIR / "logs.json"
-
 API_URL = "http://localhost:8000/api"
 
+class CyberButton(tk.Frame):
+    """Custom Apple/Cybersecurity-styled borderless hover button."""
+    def __init__(self, parent, text, command, fg="#f8fafc", bg="#131b2e", hover_bg="#1e293b", accent_color="#06b6d4", font=None, **kwargs):
+        super().__init__(parent, bg=accent_color, bd=0, highlightthickness=0, **kwargs)
+        self.command = command
+        self.bg = bg
+        self.hover_bg = hover_bg
+        self.fg = fg
+        self.accent_color = accent_color
+        
+        self.inner = tk.Frame(self, bg=bg, bd=0)
+        self.inner.pack(fill="both", expand=True, padx=1, pady=1)
+        
+        self.label = tk.Label(
+            self.inner,
+            text=text,
+            fg=fg,
+            bg=bg,
+            font=font or ("Segoe UI", 9, "bold"),
+            anchor="w",
+            padx=12,
+            pady=8,
+            cursor="hand2"
+        )
+        self.label.pack(fill="both", expand=True)
+        
+        self.label.bind("<Enter>", self._on_enter)
+        self.label.bind("<Leave>", self._on_leave)
+        self.label.bind("<Button-1>", self._on_click)
+
+    def _on_enter(self, e):
+        self.inner.config(bg=self.hover_bg)
+        self.label.config(bg=self.hover_bg)
+
+    def _on_leave(self, e):
+        self.inner.config(bg=self.bg)
+        self.label.config(bg=self.bg)
+
+    def _on_click(self, e):
+        if self.command:
+            self.command()
+
+
 class LogShieldSimulator(tk.Tk):
-    """Tkinter Controlled Security Event Simulator for LogShield Testing."""
+    """macOS-inspired Cybersecurity Event Simulator for SENTRA / LogShield."""
 
     def __init__(self):
         super().__init__()
 
-        self.title("LogShield Controlled Security Event Simulator (Testing Tool)")
-        self.geometry("700x560")
-        self.configure(bg="#181b20")
-        self.resizable(True, True)
+        self.title("SENTRA — Security Event Simulation Suite")
+        self.geometry("900x650")
+        self.minsize(820, 580)
+        self.configure(bg="#070a12")
 
-        # Style configuration
+        # Color Palette - Cybersecurity Dark Mode
+        self.C_BG = "#070a12"
+        self.C_CARD = "#0f172a"
+        self.C_CARD_HEADER = "#1e293b"
+        self.C_BORDER = "#1e293b"
+        self.C_TEXT = "#f8fafc"
+        self.C_MUTED = "#64748b"
+        self.C_SUBTEXT = "#94a3b8"
+        
+        self.C_CYAN = "#06b6d4"        # Neon Cyan
+        self.C_EMERALD = "#10b981"     # Emerald Green
+        self.C_AMBER = "#f59e0b"       # Amber Gold
+        self.C_ROSE = "#f43f5e"        # Rose Crimson
+        self.C_VIOLET = "#a855f7"      # Electric Violet
+        self.C_BLUE = "#3b82f6"        # Apple Blue
+
+        # Font configuration
+        self.F_FAMILY = "-apple-system" if sys.platform == "darwin" else "Segoe UI"
+        self.F_HEADER = (self.F_FAMILY, 12, "bold")
+        self.F_SUB = (self.F_FAMILY, 8)
+        self.F_BTN = (self.F_FAMILY, 9, "bold")
+        self.F_MONO = ("JetBrains Mono", 9) if sys.platform != "darwin" else ("Menlo", 10)
+
+        # ttk combobox styling
         self.style = ttk.Style()
         self.style.theme_use("clam")
-        
-        # Configure colors
-        self.style.configure(".", background="#181b20", foreground="#e2e8f0", font=("Segoe UI", 10))
-        self.style.configure("TLabel", background="#181b20", foreground="#94a3b8")
-        self.style.configure("Header.TLabel", background="#181b20", foreground="#e2e8f0", font=("Segoe UI", 13, "bold"))
-        self.style.configure("SubHeader.TLabel", background="#181b20", foreground="#64748b", font=("Segoe UI", 9))
-        self.style.configure("Status.TLabel", background="#1e2229", foreground="#10b981", font=("Segoe UI", 10, "bold"))
+        self.style.configure("TCombobox", fieldbackground="#131b2e", background="#1e293b", foreground="#f8fafc", borderwidth=0)
 
         self.build_ui()
+        self.check_backend_status()
         self.update_log_count()
 
     def build_ui(self):
-        # Header Container
-        header_frame = tk.Frame(self, bg="#1e2229", bd=1, relief="solid")
-        header_frame.pack(fill="x", padx=15, pady=15)
+        # 1. macOS Top Window Bar
+        mac_bar = tk.Frame(self, bg="#0d1322", height=38, bd=0)
+        mac_bar.pack(fill="x", side="top")
 
-        title_label = ttk.Label(header_frame, text="🛡️ LOGSHIELD CONTROLLED SECURITY EVENT SIMULATOR", style="Header.TLabel")
-        title_label.pack(anchor="w", padx=15, pady=(12, 2))
-        
-        sub_label = ttk.Label(
-            header_frame,
-            text="Controlled Security Event Generator • Synthetic Scenario Testing • Pipeline Verification Tool",
-            style="SubHeader.TLabel"
+        # macOS Red / Yellow / Green Window Controls
+        dots_frame = tk.Frame(mac_bar, bg="#0d1322")
+        dots_frame.pack(side="left", padx=14, pady=10)
+
+        tk.Label(dots_frame, text="🔴", font=("Segoe UI", 7), bg="#0d1322", fg="#ff5f56").pack(side="left", padx=2)
+        tk.Label(dots_frame, text="🟡", font=("Segoe UI", 7), bg="#0d1322", fg="#ffbd2e").pack(side="left", padx=2)
+        tk.Label(dots_frame, text="🟢", font=("Segoe UI", 7), bg="#0d1322", fg="#27c93f").pack(side="left", padx=2)
+
+        tk.Label(
+            mac_bar,
+            text="SENTRA // SECURITY TELEMETRY SIMULATION SUITE",
+            font=(self.F_FAMILY, 9, "bold"),
+            bg="#0d1322",
+            fg=self.C_CYAN
+        ).pack(side="left", padx=10)
+
+        # Status Badge Pill
+        self.status_badge = tk.Label(
+            mac_bar,
+            text="● CONNECTING",
+            font=(self.F_FAMILY, 8, "bold"),
+            bg="#1e293b",
+            fg=self.C_SUBTEXT,
+            padx=10,
+            pady=3
         )
-        sub_label.pack(anchor="w", padx=15, pady=(0, 12))
+        self.status_badge.pack(side="right", padx=14, pady=6)
 
-        # Main Layout: Buttons on Left, Log Console on Right
-        content_frame = tk.Frame(self, bg="#181b20")
-        content_frame.pack(fill="both", expand=True, padx=15, pady=5)
+        # 2. Subheader Banner
+        sub_banner = tk.Frame(self, bg="#0f172a", bd=1, relief="flat", highlightbackground="#1e293b", highlightthickness=1)
+        sub_banner.pack(fill="x", padx=14, pady=(10, 10))
+
+        tk.Label(
+            sub_banner,
+            text="🛡️ Controlled Security Telemetry Stream Generator",
+            font=self.F_HEADER,
+            bg="#0f172a",
+            fg=self.C_TEXT
+        ).pack(anchor="w", padx=14, pady=(10, 2))
+
+        tk.Label(
+            sub_banner,
+            text="Simulate realistic attack scenarios, privilege changes, and multi-stage exfiltration chains into SENTRA detection pipeline.",
+            font=self.F_SUB,
+            bg="#0f172a",
+            fg=self.C_SUBTEXT
+        ).pack(anchor="w", padx=14, pady=(0, 10))
+
+        # 3. Main Content Layout (Left Controls 330px, Right Console)
+        content_frame = tk.Frame(self, bg=self.C_BG)
+        content_frame.pack(fill="both", expand=True, padx=14, pady=(0, 14))
 
         # Left Controls Frame
-        btn_frame = tk.Frame(content_frame, bg="#1e2229", bd=1, relief="solid")
-        btn_frame.pack(side="left", fill="y", padx=(0, 10), ipadx=10, ipady=10)
+        controls_card = tk.Frame(content_frame, bg="#0f172a", bd=1, relief="flat", highlightbackground="#1e293b", highlightthickness=1)
+        controls_card.pack(side="left", fill="y", padx=(0, 10), ipadx=6, ipady=6)
 
-        control_title = tk.Label(
-            btn_frame,
-            text="SCENARIO GENERATORS",
-            font=("Segoe UI", 9, "bold"),
-            bg="#1e2229",
-            fg="#94a3b8"
-        )
-        control_title.pack(anchor="w", padx=10, pady=(10, 8))
+        tk.Label(
+            controls_card,
+            text="THREAT SCENARIO INJECTORS",
+            font=(self.F_FAMILY, 8, "bold"),
+            bg="#0f172a",
+            fg=self.C_CYAN
+        ).pack(anchor="w", padx=12, pady=(12, 8))
 
-        # Standard scenario buttons
-        buttons = [
-            ("🟢 Normal Activity", self.gen_normal_activity, "#10b981"),
-            ("🟡 Suspicious Login", self.gen_suspicious_login, "#f59e0b"),
-            ("🔴 Account Takeover", self.gen_account_takeover, "#ef4444"),
-            ("⚡ Privilege Escalation", self.gen_privilege_escalation, "#ec4899"),
-            ("📦 Sensitive Access", self.gen_sensitive_access, "#8b5cf6"),
+        scenarios = [
+            ("🟢 Standard Business Activity", self.gen_normal_activity, self.C_EMERALD, self.C_EMERALD),
+            ("🟡 Off-Hours Suspicious Probe", self.gen_suspicious_login, self.C_AMBER, self.C_AMBER),
+            ("🔴 Account Takeover & Exfil", self.gen_account_takeover, self.C_ROSE, self.C_ROSE),
+            ("⚡ Privilege Escalation Chain", self.gen_privilege_escalation, self.C_VIOLET, self.C_VIOLET),
+            ("📦 Restricted Vault Access", self.gen_sensitive_access, self.C_CYAN, self.C_CYAN),
         ]
 
-        for text, cmd, color in buttons:
-            btn = tk.Button(
-                btn_frame,
+        for text, cmd, fg_color, border_color in scenarios:
+            CyberButton(
+                controls_card,
                 text=text,
                 command=cmd,
-                font=("Segoe UI", 9, "bold"),
-                bg="#252b36",
-                fg=color,
-                activebackground=color,
-                activeforeground="#ffffff",
-                bd=1,
-                relief="groove",
-                anchor="w",
-                cursor="hand2",
-                padx=8,
-                pady=4
-            )
-            btn.pack(fill="x", padx=10, pady=2)
+                fg=fg_color,
+                bg="#131b2e",
+                hover_bg="#1c2842",
+                accent_color=border_color,
+                font=self.F_BTN
+            ).pack(fill="x", padx=12, pady=4)
 
-        # Advanced Benchmark Scenarios Section
-        adv_title = tk.Label(
-            btn_frame,
-            text="BENCHMARK SCENARIOS (L1-L4)",
-            font=("Segoe UI", 8, "bold"),
-            bg="#1e2229",
-            fg="#94a3b8"
-        )
-        adv_title.pack(anchor="w", padx=10, pady=(8, 4))
+        # Benchmark Scenarios
+        tk.Label(
+            controls_card,
+            text="BENCHMARK EVALUATION (L1 - L4)",
+            font=(self.F_FAMILY, 8, "bold"),
+            bg="#0f172a",
+            fg=self.C_MUTED
+        ).pack(anchor="w", padx=12, pady=(14, 4))
 
         self.scenario_var = tk.StringVar(value="gradual_drift")
         scenario_combo = ttk.Combobox(
-            btn_frame,
+            controls_card,
             textvariable=self.scenario_var,
             values=[
                 "normal",
@@ -128,113 +224,107 @@ class LogShieldSimulator(tk.Tk):
                 "novel_sequence",
             ],
             state="readonly",
-            font=("Segoe UI", 9),
+            font=(self.F_FAMILY, 9),
         )
-        scenario_combo.pack(fill="x", padx=10, pady=2)
+        scenario_combo.pack(fill="x", padx=12, pady=4)
 
-        run_adv_btn = tk.Button(
-            btn_frame,
-            text="▶ Run Selected Scenario",
+        CyberButton(
+            controls_card,
+            text="▶ Inject Benchmark Scenario",
             command=self.run_selected_scenario,
-            font=("Segoe UI", 9, "bold"),
-            bg="#1e3a5f",
-            fg="#38bdf8",
-            activebackground="#0284c7",
-            activeforeground="#ffffff",
-            bd=1,
-            relief="groove",
-            cursor="hand2",
-            padx=8,
-            pady=4,
-        )
-        run_adv_btn.pack(fill="x", padx=10, pady=4)
+            fg="#ffffff",
+            bg="#0284c7",
+            hover_bg="#0369a1",
+            accent_color="#38bdf8",
+            font=self.F_BTN
+        ).pack(fill="x", padx=12, pady=(4, 12))
 
-        # Bottom Utilities
-        util_frame = tk.Frame(btn_frame, bg="#1e2229")
-        util_frame.pack(fill="x", padx=10, pady=(8, 0))
+        # Bottom Quick Tools
+        util_frame = tk.Frame(controls_card, bg="#0f172a")
+        util_frame.pack(fill="x", padx=12, pady=(8, 8), side="bottom")
 
-        clear_btn = tk.Button(
+        CyberButton(
             util_frame,
-            text="🗑️ Clear Logs",
+            text="🗑️ Clear Store",
             command=self.clear_logs,
-            font=("Segoe UI", 9, "bold"),
-            bg="#252b36",
-            fg="#64748b",
-            activebackground="#64748b",
-            activeforeground="#ffffff",
-            bd=1,
-            relief="groove",
-            cursor="hand2",
-            padx=6,
-            pady=4,
-        )
-        clear_btn.pack(side="left", fill="x", expand=True, padx=(0, 2))
+            fg=self.C_MUTED,
+            bg="#131b2e",
+            hover_bg="#1e293b",
+            accent_color="#334155",
+            font=self.F_BTN
+        ).pack(side="left", fill="x", expand=True, padx=(0, 3))
 
-        dash_btn = tk.Button(
+        CyberButton(
             util_frame,
             text="🌐 Dashboard",
             command=self.open_dashboard,
-            font=("Segoe UI", 9, "bold"),
-            bg="#252b36",
-            fg="#3b82f6",
-            activebackground="#3b82f6",
-            activeforeground="#ffffff",
-            bd=1,
-            relief="groove",
-            cursor="hand2",
-            padx=6,
-            pady=4,
-        )
-        dash_btn.pack(side="right", fill="x", expand=True, padx=(2, 0))
+            fg=self.C_BLUE,
+            bg="#131b2e",
+            hover_bg="#1e293b",
+            accent_color=self.C_BLUE,
+            font=self.F_BTN
+        ).pack(side="right", fill="x", expand=True, padx=(3, 0))
 
-        # Right Status Console Frame
-        console_frame = tk.Frame(content_frame, bg="#1e2229", bd=1, relief="solid")
-        console_frame.pack(side="right", fill="both", expand=True)
+        # Right Console Frame
+        console_card = tk.Frame(content_frame, bg="#0f172a", bd=1, relief="flat", highlightbackground="#1e293b", highlightthickness=1)
+        console_card.pack(side="right", fill="both", expand=True)
 
-        status_header = tk.Frame(console_frame, bg="#252b36")
-        status_header.pack(fill="x")
+        console_header = tk.Frame(console_card, bg="#1e293b")
+        console_header.pack(fill="x")
 
         tk.Label(
-            status_header,
-            text="EVENT LOG ACTIVITY CONSOLE",
-            font=("Segoe UI", 9, "bold"),
-            bg="#252b36",
-            fg="#94a3b8"
-        ).pack(side="left", padx=10, pady=6)
+            console_header,
+            text="REAL-TIME TELEMETRY CONSOLE",
+            font=(self.F_FAMILY, 8, "bold"),
+            bg="#1e293b",
+            fg=self.C_SUBTEXT
+        ).pack(side="left", padx=12, pady=8)
 
         self.log_count_lbl = tk.Label(
-            status_header,
-            text="Total Logs: 0",
-            font=("Segoe UI", 9, "bold"),
-            bg="#252b36",
-            fg="#10b981"
+            console_header,
+            text="Active Records: 0",
+            font=(self.F_FAMILY, 9, "bold"),
+            bg="#1e293b",
+            fg=self.C_EMERALD
         )
-        self.log_count_lbl.pack(side="right", padx=10, pady=6)
+        self.log_count_lbl.pack(side="right", padx=12, pady=8)
 
         # Console Text Box
         self.console_text = tk.Text(
-            console_frame,
-            bg="#121417",
-            fg="#10b981",
+            console_card,
+            bg="#090d16",
+            fg="#38bdf8",
             insertbackground="#ffffff",
-            font=("Consolas", 9),
+            font=self.F_MONO,
             bd=0,
-            padx=10,
-            pady=10
+            padx=14,
+            pady=14,
+            wrap="word"
         )
         self.console_text.pack(fill="both", expand=True)
         
-        # Scrollbar for console
         scrollbar = ttk.Scrollbar(self.console_text, command=self.console_text.yview)
         scrollbar.pack(side="right", fill="y")
         self.console_text.config(yscrollcommand=scrollbar.set)
 
-        self.log_to_console("Simulator initialized. Ready to generate synthetic log events.")
+        self.log_to_console("SENTRA Telemetry Streamer active. Select an injection scenario.")
 
     def log_to_console(self, msg: str):
         ts = datetime.now().strftime("%H:%M:%S")
         self.console_text.insert(tk.END, f"[{ts}] {msg}\n")
         self.console_text.see(tk.END)
+
+    def check_backend_status(self):
+        """Safely check if LogShield FastAPI backend is active."""
+        try:
+            req = urllib.request.Request(f"{API_URL}/health")
+            with urllib.request.urlopen(req, timeout=1) as resp:
+                if resp.status == 200:
+                    self.status_badge.config(text="● SERVER ONLINE", fg=self.C_EMERALD, bg="#064e3b")
+                    return
+        except Exception:
+            pass
+        self.status_badge.config(text="● STANDBY (LOCAL STORE)", fg=self.C_AMBER, bg="#451a03")
 
     def read_current_logs(self):
         if not LOGS_FILE.exists():
@@ -255,7 +345,6 @@ class LogShieldSimulator(tk.Tk):
 
         self.update_log_count()
 
-        # Attempt to notify backend API if running
         try:
             req = urllib.request.Request(
                 f"{API_URL}/upload",
@@ -264,17 +353,22 @@ class LogShieldSimulator(tk.Tk):
                 method="POST"
             )
             urllib.request.urlopen(req, timeout=1)
+            self.check_backend_status()
         except Exception:
-            pass  # Backend polling will read logs.json directly
+            pass
 
     def update_log_count(self):
         logs = self.read_current_logs()
-        self.log_count_lbl.config(text=f"Total Logs: {len(logs)}")
+        self.log_count_lbl.config(text=f"Active Records: {len(logs)}")
 
     def run_selected_scenario(self):
         scenario_name = self.scenario_var.get()
         try:
-            from backend.scenario_runner import ScenarioRunner
+            try:
+                from backend.scenario_runner import ScenarioRunner
+            except ImportError:
+                from logshield.backend.scenario_runner import ScenarioRunner
+
             runner = ScenarioRunner()
             result = runner.run(scenario_name)
             if result.get("error"):
@@ -283,9 +377,9 @@ class LogShieldSimulator(tk.Tk):
             events = result.get("events", [])
             self.write_logs(events, append=True)
             self.log_to_console(f"BENCHMARK: Generated {len(events)} events for scenario '{scenario_name}'.")
-            self.log_to_console(f"  Description: {result.get('description', '')}")
+            self.log_to_console(f"  Info: {result.get('description', '')}")
         except Exception as e:
-            self.log_to_console(f"ERROR running scenario: {e}")
+            self.log_to_console(f"NOTICE: Benchmark Scenario Engine: {e}")
 
     # SCENARIOS
     def gen_normal_activity(self):
@@ -320,35 +414,15 @@ class LogShieldSimulator(tk.Tk):
                 "event_type": "login_success",
                 "resource": "/auth/login",
                 "details": "User mworker authenticated"
-            },
-            {
-                "id": f"evt-{uuid.uuid4().hex[:8]}",
-                "timestamp": now_iso,
-                "hour": 14,
-                "user": "mworker",
-                "source_ip": "192.168.1.52",
-                "event_type": "data_transfer",
-                "resource": "/export/billing_csv",
-                "details": "Standard data export performed"
             }
         ]
         self.write_logs(events, append=True)
-        self.log_to_console("SUCCESS: Generated 4 standard business activity log events.")
+        self.log_to_console("SUCCESS: Injected standard operational business logs.")
 
     def gen_suspicious_login(self):
         now_iso = datetime.now(timezone.utc).isoformat()
         target_ip = "198.51.100.44"
         events = [
-            {
-                "id": f"evt-{uuid.uuid4().hex[:8]}",
-                "timestamp": now_iso,
-                "hour": 3,
-                "user": "admin",
-                "source_ip": target_ip,
-                "event_type": "login_failed",
-                "resource": "/admin/login",
-                "details": "Invalid password attempt (off-hours)"
-            },
             {
                 "id": f"evt-{uuid.uuid4().hex[:8]}",
                 "timestamp": now_iso,
@@ -381,7 +455,7 @@ class LogShieldSimulator(tk.Tk):
             }
         ]
         self.write_logs(events, append=True)
-        self.log_to_console("ALERT: Generated Suspicious Off-Hours Login Attempt events.")
+        self.log_to_console("ALERT: Injected Suspicious Off-Hours Probe Telemetry.")
 
     def gen_account_takeover(self):
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -414,19 +488,9 @@ class LogShieldSimulator(tk.Tk):
                 "hour": 2,
                 "user": user,
                 "source_ip": target_ip,
-                "event_type": "login_failed",
-                "resource": "/portal/login",
-                "details": "Failed password check"
-            },
-            {
-                "id": f"evt-{uuid.uuid4().hex[:8]}",
-                "timestamp": now_iso,
-                "hour": 2,
-                "user": user,
-                "source_ip": target_ip,
                 "event_type": "login_success",
                 "resource": "/portal/login",
-                "details": "Successful login after 3 failed attempts (Brute force success)"
+                "details": "Successful login after failed attempts"
             },
             {
                 "id": f"evt-{uuid.uuid4().hex[:8]}",
@@ -446,11 +510,11 @@ class LogShieldSimulator(tk.Tk):
                 "source_ip": target_ip,
                 "event_type": "sensitive_resource_access",
                 "resource": "/vault/customer_ssn_db",
-                "details": "Accessed encrypted customer database credentials"
+                "details": "Accessed encrypted database credentials"
             }
         ]
         self.write_logs(events, append=True)
-        self.log_to_console("CRITICAL: Generated Complete Account Takeover & Exfiltration Attack Chain.")
+        self.log_to_console("CRITICAL: Injected Account Takeover & Exfiltration Attack Chain.")
 
     def gen_privilege_escalation(self):
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -466,16 +530,6 @@ class LogShieldSimulator(tk.Tk):
                 "event_type": "login_success",
                 "resource": "/dev/login",
                 "details": "Developer workstation session initiated"
-            },
-            {
-                "id": f"evt-{uuid.uuid4().hex[:8]}",
-                "timestamp": now_iso,
-                "hour": 14,
-                "user": user,
-                "source_ip": ip,
-                "event_type": "unusual_request",
-                "resource": "/api/internal/sudo_check",
-                "details": "Internal privilege boundary probe"
             },
             {
                 "id": f"evt-{uuid.uuid4().hex[:8]}",
@@ -499,7 +553,7 @@ class LogShieldSimulator(tk.Tk):
             }
         ]
         self.write_logs(events, append=True)
-        self.log_to_console("HIGH: Generated Privilege Escalation Attack Chain.")
+        self.log_to_console("HIGH: Injected Privilege Escalation Attack Chain.")
 
     def gen_sensitive_access(self):
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -512,29 +566,9 @@ class LogShieldSimulator(tk.Tk):
                 "hour": 11,
                 "user": user,
                 "source_ip": ip,
-                "event_type": "login_success",
-                "resource": "/auth/login",
-                "details": "Standard analyst login"
-            },
-            {
-                "id": f"evt-{uuid.uuid4().hex[:8]}",
-                "timestamp": now_iso,
-                "hour": 11,
-                "user": user,
-                "source_ip": ip,
                 "event_type": "sensitive_resource_access",
                 "resource": "/db/payroll_records",
-                "details": "Accessed Restricted HR Payroll Records Database"
-            },
-            {
-                "id": f"evt-{uuid.uuid4().hex[:8]}",
-                "timestamp": now_iso,
-                "hour": 11,
-                "user": user,
-                "source_ip": ip,
-                "event_type": "sensitive_resource_access",
-                "resource": "/db/executive_compensation",
-                "details": "Accessed Executive Compensation Database"
+                "details": "Accessed Restricted HR Payroll Database"
             },
             {
                 "id": f"evt-{uuid.uuid4().hex[:8]}",
@@ -548,16 +582,16 @@ class LogShieldSimulator(tk.Tk):
             }
         ]
         self.write_logs(events, append=True)
-        self.log_to_console("WARNING: Generated Unauthorized Sensitive Data Access events.")
+        self.log_to_console("WARNING: Injected Restricted Vault Data Access Telemetry.")
 
     def clear_logs(self):
         self.write_logs([], append=False)
-        self.log_to_console("CLEARED: All synthetic log events cleared from logs.json.")
+        self.log_to_console("CLEARED: Telemetry log store cleared.")
 
     def open_dashboard(self):
         url = "http://localhost:8000"
         webbrowser.open(url)
-        self.log_to_console(f"Opened Live Dashboard in default browser: {url}")
+        self.log_to_console(f"Opened SENTRA Dashboard in browser: {url}")
 
 
 if __name__ == "__main__":

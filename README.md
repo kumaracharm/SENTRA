@@ -95,6 +95,13 @@ Evaluation considers detection precision, recall, false positives, false negativ
 ## 🚀 Current Status
 
 **Working prototype:** API-based event ingestion, detection components, a web dashboard, and synthetic scenario testing.
+## Screenshots
+
+### SENTRA Dashboard
+![SENTRA Dashboard](docs/images/sentra-dashboard.png)
+
+### Bank Demo Application
+![Bank Demo](docs/images/bank-demo.png)
 
 ## 🗺️ Future Scope
 
